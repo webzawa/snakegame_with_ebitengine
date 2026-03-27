@@ -76,16 +76,14 @@ Ebitengine を使ったクトゥルフ風スネークゲームの実装マイル
 ### M13: GitHub Pages 公開
 参考: [eihigh/wasmgame](https://github.com/eihigh/wasmgame/blob/main/README_ja.md)
 
-- [ ] WASM ビルド環境の整備
-  - `go run ./tool build` でブラウザ向けビルド（`game.wasm` + `wasm_exec.js` 生成）
-  - `go run ./tool serve` でローカル確認（localhost:8080）
-- [ ] `index.html` 作成（ゲーム埋め込み用 HTML）
-  - Layout の縦横比（640:480 = 4:3）と HTML 側の `aspect-ratio` を一致させる
-- [ ] GitHub Pages の有効化
-  - Settings > Pages > Source で「GitHub Actions」を選択
-- [ ] GitHub Actions ワークフロー作成（main push で自動デプロイ）
-- [ ] `https://<username>.github.io/<reponame>` で公開確認
-- [ ] 素材の読み込みを `embed` または `open` 関数経由に統一（WASM 対応）
+- [x] WASM ビルド確認（`GOOS=js GOARCH=wasm go build` → 16MB）
+- [x] `wasm_exec.js` を Go ランタイムからコピー
+- [x] `index.html` 作成（4:3 アスペクト比、ダークテーマ）
+- [x] GitHub Actions ワークフロー作成（`.github/workflows/deploy.yml`）
+- [x] リポジトリを Public に変更
+- [x] GitHub Pages 有効化（Source: GitHub Actions）
+- [x] デプロイ成功: https://webzawa.github.io/snakegame_with_ebitengine/
+- [x] 素材は `embed` で埋め込み済み（WASM 対応済み）
 
 ## 今後の拡張案（未実装）
 - [ ] ハイスコアの保存
