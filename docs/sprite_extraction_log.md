@@ -7,6 +7,17 @@
 キャラクターシート画像（`Gemini_Generated_Image_xe5vywxe5vywxe5v.png`）からゲーム用スプライトを抽出し、`assets/` ディレクトリに保存した。
 使用Skills `/image-utils`
 
+## プロンプト
+Task: Create a Game Sprite Sheet for a top-down 2D snake game.
+Character: A 16-bit pixel art eldritch tentacle horror (Cthulhu mythos theme) with dark green slimy skin and deep purple suction cups.
+Action: A sprite set containing the snake entity and collectible items, displayed in a grid layout.
+Details:
+* Row 1 (Head): A 4-frame animation of a grotesque, many-eyed head writhing and opening its maw.
+* Row 2 (Body): Straight and 90-degree curved tentacle body segments.
+* Row 3 (Food/Items): Collectible items including a glowing Necronomicon (tome), a pulsing human brain, and a mystical Elder Sign.
+* Top-down perspective.
+Tech Specs: Uniform grid layout, clean pixel edges, transparent background, SNES aesthetic, dark cosmic horror color palette. No anti-aliasing.
+
 ## 元画像
 - ファイル: `/Users/mkt/Downloads/Gemini_Generated_Image_xe5vywxe5vywxe5v.png`
 - サイズ: 2760x1504px (RGBA)
