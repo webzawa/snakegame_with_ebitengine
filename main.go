@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"image/color"
 	"image/png"
+	"io"
 	"log"
 	"math/rand"
 
@@ -114,7 +115,12 @@ var (
 
 	// オーディオ
 	audioCtx  = audio.NewContext(sampleRate) // オーディオコンテキスト（全体で1つ）
-	bgmPlayer *audio.Player                 // BGMプレイヤー（ループ再生用）
+	bgmPlayer *audio.Player                  // BGMプレイヤー（ループ再生用）
+
+	// SE（効果音）のデコード済みデータ
+	// 毎回再生するたびにデコードし直すのは無駄なので、起動時にデコードして保持する
+	seEatData      []byte // 食べ物を食べた時のSE
+	seGameOverData []byte // ゲームオーバー時のSE
 )
 
 // spriteScale はスプライト(128px)をグリッド(20px)に収めるための縮小倍率。
@@ -166,8 +172,44 @@ func init() {
 	foodSprites[1] = loadImage("food_brain")
 	foodSprites[2] = loadImage("food_elder_sign")
 
+	// SE（効果音）のデコード済みPCMデータを準備
+	seEatData = decodeSE("se_eat")
+	seGameOverData = decodeSE("se_gameover")
+
 	// BGM の読み込みとループ再生開始
 	initBGM()
+}
+
+// decodeSE はMP3の効果音ファイルを読み込み、デコード済みPCMバイト列を返す。
+// 毎回再生のたびにデコードするのではなく、起動時に一度だけデコードしてメモリに保持する。
+func decodeSE(name string) []byte {
+	data, err := assetsFS.ReadFile("assets/" + name + ".mp3")
+	if err != nil {
+		log.Fatalf("SEの読み込みに失敗: %s: %v", name, err)
+	}
+
+	stream, err := mp3.DecodeWithoutResampling(bytes.NewReader(data))
+	if err != nil {
+		log.Fatalf("SEのデコードに失敗: %s: %v", name, err)
+	}
+
+	// デコード済みPCMデータを全て読み出す
+	decoded, err := io.ReadAll(stream)
+	if err != nil {
+		log.Fatalf("SEの読み出しに失敗: %s: %v", name, err)
+	}
+	return decoded
+}
+
+// playSE はデコード済みPCMデータからプレイヤーを作成して再生する。
+// 毎回新しいプレイヤーを作成するため、同じSEの重複再生も可能。
+func playSE(data []byte) {
+	player, err := audioCtx.NewPlayer(bytes.NewReader(data))
+	if err != nil {
+		return // SEの再生失敗はゲームを止めるほどではないので無視
+	}
+	player.SetVolume(0.5) // SE音量50%
+	player.Play()
 }
 
 // initBGM はBGMファイルを読み込み、音量30%で無限ループ再生を開始する。
@@ -340,6 +382,7 @@ func (g *Game) Update() error {
 	// 新しい頭の位置がグリッドの範囲外に出たらゲームオーバー
 	if newHead.X < 0 || newHead.X >= columns || newHead.Y < 0 || newHead.Y >= rows {
 		g.gameOver = true
+		playSE(seGameOverData)
 		return nil
 	}
 
@@ -348,6 +391,7 @@ func (g *Game) Update() error {
 	for _, p := range g.snake {
 		if p == newHead {
 			g.gameOver = true
+			playSE(seGameOverData)
 			return nil
 		}
 	}
@@ -365,6 +409,7 @@ func (g *Game) Update() error {
 		// - 尻尾は削除しない（= 蛇が1マス伸びる）
 		g.score++
 		g.spawnFood()
+		playSE(seEatData)
 	} else {
 		// 食べ物を食べていない場合:
 		// - 尻尾の最後の1マスを削除する（= 蛇の長さを維持して前に進む）

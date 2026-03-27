@@ -51,14 +51,25 @@ Ebitengine を使ったクトゥルフ風スネークゲームの実装マイル
 - [x] Space キーでポーズ/再開をトグル
 - [x] ポーズ中にオーバーレイ + "PAUSED" メッセージ表示
 
-### M9: 仕上げ
+### M9: BGM の追加
+- [x] BGMファイル（`bgm.mp3`）をアセットに追加
+- [x] `audio/mp3` でデコード → `NewInfiniteLoop` で無限ループ再生
+- [x] 音量30%で再生
+
+### M10: SE（効果音）の追加
+- [x] Pixabay からフリー素材を取得
+  - `se_eat.mp3` — 食べ物取得時（[game-eat-sound-83240](https://pixabay.com/sound-effects/game-eat-sound-83240/)）
+  - `se_gameover.mp3` — ゲームオーバー時（[videogame-death-sound-43894](https://pixabay.com/sound-effects/videogame-death-sound-43894/)）
+- [x] 起動時に MP3 → PCM デコードしてメモリ保持
+- [x] 食べ物取得・ゲームオーバー時に SE 再生（音量50%）
+
+### M11: 仕上げ
 - [x] 日本語コメントの付与（初心者向け）
-- [x] ドキュメント整備（ebitengine-guide, README）
-- [x] 作業ログ作成
+- [x] ドキュメント整備（ebitengine-guide, README, .gitignore）
+- [x] 作業ログ・マイルストーン更新
 - [ ] 全機能の最終動作確認
 
 ## 今後の拡張案（未実装）
-- [ ] 効果音・BGM の追加
 - [ ] ハイスコアの保存
 - [ ] 難易度設定（速度の段階的上昇）
 - [ ] タイトル画面
