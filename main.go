@@ -19,6 +19,7 @@ import (
 
 	"github.com/hajimehoshi/ebiten/v2"            // Ebitengineのコアパッケージ
 	"github.com/hajimehoshi/ebiten/v2/ebitenutil" // 矩形描画やデバッグ表示などのユーティリティ
+	"github.com/hajimehoshi/ebiten/v2/inpututil"  // キーの「押された瞬間」判定用
 )
 
 // ──────────────────────────────────────────────
@@ -38,12 +39,12 @@ var assetsFS embed.FS
 const (
 	screenWidth  = 640 // ゲームウィンドウの幅（ピクセル）
 	screenHeight = 480 // ゲームウィンドウの高さ（ピクセル）
-	gridSize     = 20  // 1マスのサイズ（ピクセル）。蛇も食べ物もこのサイズで描画される
-	moveInterval = 8   // 蛇が移動する間隔（フレーム数）。Update()は毎秒60回呼ばれるので、
-	//                    8フレームごと = 約7.5回/秒の移動速度になる
+	gridSize     = 32  // 1マスのサイズ（ピクセル）。蛇も食べ物もこのサイズで描画される
+	moveInterval = 15  // 蛇が移動する間隔（フレーム数）。Update()は毎秒60回呼ばれるので、
+	//                    15フレームごと = 4回/秒の移動速度になる
 
-	columns = screenWidth / gridSize  // グリッドの横マス数 (640/20 = 32マス)
-	rows    = screenHeight / gridSize // グリッドの縦マス数 (480/20 = 24マス)
+	columns = screenWidth / gridSize  // グリッドの横マス数 (640/32 = 20マス)
+	rows    = screenHeight / gridSize // グリッドの縦マス数 (480/32 = 15マス)
 
 	spriteSize = 128 // 元スプライトのサイズ（128x128px）
 )
@@ -174,6 +175,7 @@ type Game struct {
 	foodType  int   // 食べ物の種類（0: ネクロノミコン, 1: 脳, 2: エルダーサイン）
 	score     int   // 現在のスコア（食べ物を食べた回数）
 	gameOver  bool  // ゲームオーバー状態かどうか
+	paused    bool  // 一時停止中かどうか（Spaceキーでトグル）
 	tickCount int   // フレームカウンタ。moveInterval に達するたびに蛇が1マス移動する
 }
 
@@ -245,14 +247,21 @@ func (g *Game) spawnFood() {
 func (g *Game) Update() error {
 
 	// --- ゲームオーバー中の処理 ---
-	// ゲームオーバー状態では、Enter または Space キーが押されたらゲームをリスタート
+	// ゲームオーバー状態では、Enter キーが押されたらゲームをリスタート
 	if g.gameOver {
-		if ebiten.IsKeyPressed(ebiten.KeyEnter) || ebiten.IsKeyPressed(ebiten.KeySpace) {
-			// NewGame() で新しいゲーム状態を作り、現在のGameを丸ごと上書きする
-			// ポインタの中身を差し替えることで、Ebitengineが保持しているポインタはそのまま使える
+		if ebiten.IsKeyPressed(ebiten.KeyEnter) {
 			*g = *NewGame()
 		}
 		return nil // ゲームオーバー中は以降の処理をスキップ
+	}
+
+	// --- 一時停止の切り替え ---
+	// IsKeyJustPressed を使い、押された瞬間だけトグルする（長押し連打を防ぐ）
+	if inpututil.IsKeyJustPressed(ebiten.KeySpace) {
+		g.paused = !g.paused
+	}
+	if g.paused {
+		return nil // ポーズ中はゲームロジックを一切更新しない
 	}
 
 	// --- キー入力の処理 ---
@@ -339,8 +348,10 @@ func (g *Game) Update() error {
 // 毎回画面をクリアしてから全てを描き直す（ダブルバッファリングはEbitengineが自動で行う）。
 // スプライト画像を使って蛇・食べ物・UIを描画する。
 func (g *Game) Draw(screen *ebiten.Image) {
-	// --- 背景画像の描画 ---
-	screen.DrawImage(backgroundImg, nil)
+	// --- 背景画像の描画（暗めに描画してスプライトを目立たせる） ---
+	op := &ebiten.DrawImageOptions{}
+	op.ColorScale.Scale(0.3, 0.3, 0.3, 1) // RGB を 30% に減光
+	screen.DrawImage(backgroundImg, op)
 
 	// --- 蛇の体の描画（頭以外のセグメント） ---
 	for i := 1; i < len(g.snake); i++ {
@@ -388,6 +399,16 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	// 画面の左上にスコアを表示する（DebugPrint は常に左上に表示される）
 	ebitenutil.DebugPrint(screen, fmt.Sprintf("Score: %d", g.score))
 
+	// --- ポーズ表示 ---
+	if g.paused {
+		overlay := ebiten.NewImage(screenWidth, screenHeight)
+		overlay.Fill(color.RGBA{0, 0, 0, 120})
+		screen.DrawImage(overlay, nil)
+
+		ebitenutil.DebugPrintAt(screen, "PAUSED", screenWidth/2-20, screenHeight/2-10)
+		ebitenutil.DebugPrintAt(screen, "Press Space to resume", screenWidth/2-65, screenHeight/2+10)
+	}
+
 	// --- ゲームオーバー表示 ---
 	// ゲームオーバー状態の場合、画面中央にメッセージを表示する
 	if g.gameOver {
@@ -398,7 +419,7 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		screen.DrawImage(overlay, nil)
 
 		ebitenutil.DebugPrintAt(screen, "GAME OVER", screenWidth/2-30, screenHeight/2-10)
-		ebitenutil.DebugPrintAt(screen, "Press Enter or Space to restart", screenWidth/2-95, screenHeight/2+10)
+		ebitenutil.DebugPrintAt(screen, "Press Enter to restart", screenWidth/2-70, screenHeight/2+10)
 	}
 }
 
