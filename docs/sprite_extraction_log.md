@@ -94,6 +94,41 @@ Tech Specs: Uniform grid layout, clean pixel edges, transparent background, SNES
 |---------|-------|------|
 | `body_vertical_rot90.png` | `body_vertical.png` | 時計回り90度回転 |
 
+### カーブ胴体セグメント（水平ボディからワープ生成）
+- `body_horizontal.png` を極座標変換で90度の円弧に沿ってワープし、基本カーブを生成
+- 左右反転・上下反転で4方向を作成
+
+| ファイル | サイズ | 説明 |
+|---------|-------|------|
+| `body_segment_curved_top_left.png` | 128x128 | 左上コーナー（右→下） |
+| `body_segment_curved_top_right.png` | 128x128 | 右上コーナー（左→下） |
+| `body_segment_curved_bottom_left.png` | 128x128 | 左下コーナー（右→上） |
+| `body_segment_curved_bottom_right.png` | 128x128 | 右下コーナー（左→上） |
+
+### 尻尾（水平ボディからテーパー生成）
+- `body_horizontal.png` を元に、先端に向かって細くなるテーパー処理を適用
+- x=35%地点から先端にかけて、垂直方向の表示幅を85%削減（中心に向かって収束）
+- x=70%以降はアルファ値もフェードアウト
+- 回転・反転で4方向を作成
+
+| ファイル | サイズ | 説明 |
+|---------|-------|------|
+| `tail_right.png` | 128x128 | 右向き尻尾（先端が右） |
+| `tail_left.png` | 128x128 | 左向き尻尾（先端が左） |
+| `tail_up.png` | 128x128 | 上向き尻尾（先端が上） |
+| `tail_down.png` | 128x128 | 下向き尻尾（先端が下） |
+
+## 背景画像
+
+- 元ファイル: `/Users/mkt/Downloads/Gemini_Generated_Image_3trnqe3trnqe3trn.png`
+- 元サイズ: 2754x1536px (RGBA)
+- アスペクト比を維持したまま高さ480px基準でリサイズ（→ 860x480）
+- 左右を中央クロップして 640x480 に整形（ゲームウィンドウサイズ `screenWidth=640, screenHeight=480` に合致）
+
+| ファイル | サイズ | 説明 |
+|---------|-------|------|
+| `background.png` | 640x480 | ゲーム背景（海底神殿、エルダーサイン中央配置） |
+
 ## 使用ツール・ライブラリ
 - Python 3
 - OpenCV (`cv2`) 4.11.0 — 輪郭検出・モルフォロジー演算

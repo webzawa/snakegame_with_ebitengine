@@ -110,6 +110,9 @@ var (
 	curveBottomLeft  *ebiten.Image
 	curveBottomRight *ebiten.Image
 
+	// 尻尾のスプライト（方向別に4枚。尻尾が伸びていく方向で選択）
+	tailSprites map[int]*ebiten.Image
+
 	// 食べ物のスプライト（3種類からランダムに選ばれる）
 	foodSprites [3]*ebiten.Image
 
@@ -155,6 +158,14 @@ func init() {
 		dirDown:  loadImage("head_down"),
 		dirLeft:  loadImage("head_left"),
 		dirRight: loadImage("head_right"),
+	}
+
+	// 尻尾（方向別に4枚）
+	tailSprites = map[int]*ebiten.Image{
+		dirUp:    loadImage("tail_up"),
+		dirDown:  loadImage("tail_down"),
+		dirLeft:  loadImage("tail_left"),
+		dirRight: loadImage("tail_right"),
 	}
 
 	// 体の直線セグメント
@@ -456,13 +467,21 @@ func (g *Game) Draw(screen *ebiten.Image) {
 				drawSprite(screen, curve, px, py)
 			}
 		} else {
-			// 尻尾（最後のセグメント）: 一つ前のセグメントとの位置関係で直線を選択
+			// 尻尾（最後のセグメント）: 尻尾の先端が伸びる方向でスプライトを選択
+			// 前のセグメントと反対方向が尻尾の向き
 			prev := g.snake[i-1]
-			if prev.X == p.X {
-				drawSprite(screen, bodyVertical, px, py)
-			} else {
-				drawSprite(screen, bodyHorizontal, px, py)
+			var tailDir int
+			switch {
+			case prev.Y < p.Y:
+				tailDir = dirDown // 前が上にある → 尻尾は下向き
+			case prev.Y > p.Y:
+				tailDir = dirUp
+			case prev.X < p.X:
+				tailDir = dirRight
+			default:
+				tailDir = dirLeft
 			}
+			drawSprite(screen, tailSprites[tailDir], px, py)
 		}
 	}
 
