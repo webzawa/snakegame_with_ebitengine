@@ -266,6 +266,12 @@ type Game struct {
 	gameOver  bool  // ゲームオーバー状態かどうか
 	paused    bool  // 一時停止中かどうか（Spaceキーでトグル）
 	tickCount int   // フレームカウンタ。moveInterval に達するたびに蛇が1マス移動する
+
+	// タッチ操作用（スマホ・タブレット対応）
+	touchID      ebiten.TouchID // 現在追跡中のタッチID
+	touchStartX  int            // タッチ開始X座標
+	touchStartY  int            // タッチ開始Y座標
+	touchTracking bool          // タッチを追跡中かどうか
 }
 
 // ──────────────────────────────────────────────
@@ -335,28 +341,29 @@ func (g *Game) spawnFood() {
 // error を返すとゲームが終了する（通常は nil を返す）。
 func (g *Game) Update() error {
 
+	// --- タッチ入力の処理（スマホ・タブレット対応） ---
+	g.handleTouch()
+
 	// --- ゲームオーバー中の処理 ---
-	// ゲームオーバー状態では、Enter キーが押されたらゲームをリスタート
+	// Enter キーまたはタップでリスタート
 	if g.gameOver {
-		if ebiten.IsKeyPressed(ebiten.KeyEnter) {
+		if ebiten.IsKeyPressed(ebiten.KeyEnter) || g.isTapped() {
 			*g = *NewGame()
 		}
-		return nil // ゲームオーバー中は以降の処理をスキップ
+		return nil
 	}
 
 	// --- 一時停止の切り替え ---
-	// IsKeyJustPressed を使い、押された瞬間だけトグルする（長押し連打を防ぐ）
 	if inpututil.IsKeyJustPressed(ebiten.KeySpace) {
 		g.paused = !g.paused
 	}
 	if g.paused {
-		return nil // ポーズ中はゲームロジックを一切更新しない
+		return nil
 	}
 
 	// --- キー入力の処理 ---
 	// 矢印キーの入力を nextDir に保存する。
 	// ただし、現在の進行方向と真逆の方向は無視する（即死防止）。
-	// 例: 右に進んでいるときに左キーを押しても無視される
 	if ebiten.IsKeyPressed(ebiten.KeyArrowUp) && g.direction != dirDown {
 		g.nextDir = dirUp
 	} else if ebiten.IsKeyPressed(ebiten.KeyArrowDown) && g.direction != dirUp {
@@ -519,11 +526,85 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		screen.DrawImage(overlay, nil)
 
 		ebitenutil.DebugPrintAt(screen, "GAME OVER", screenWidth/2-30, screenHeight/2-10)
-		ebitenutil.DebugPrintAt(screen, "Press Enter to restart", screenWidth/2-70, screenHeight/2+10)
+		ebitenutil.DebugPrintAt(screen, "Tap or Enter to restart", screenWidth/2-72, screenHeight/2+10)
 	}
 }
 
-// drawSprite はスプライト画像(128x128)をグリッドサイズ(20x20)に縮小して描画する。
+// ──────────────────────────────────────────────
+// タッチ入力処理（スマホ・タブレット対応）
+// ──────────────────────────────────────────────
+
+// swipeThreshold はスワイプと判定する最小移動距離（ピクセル）。
+const swipeThreshold = 16
+
+// handleTouch はタッチ入力を処理し、スワイプ方向に応じて nextDir を設定する。
+// タッチ開始位置から一定距離以上スワイプしたら方向を確定する。
+func (g *Game) handleTouch() {
+	// 新しいタッチの検出
+	touchIDs := inpututil.AppendJustPressedTouchIDs(nil)
+	if len(touchIDs) > 0 && !g.touchTracking {
+		g.touchID = touchIDs[0]
+		g.touchStartX, g.touchStartY = ebiten.TouchPosition(g.touchID)
+		g.touchTracking = true
+	}
+
+	if !g.touchTracking {
+		return
+	}
+
+	// タッチが離されたらスワイプ判定
+	if inpututil.IsTouchJustReleased(g.touchID) {
+		g.touchTracking = false
+		return
+	}
+
+	// 現在のタッチ位置を取得してスワイプ距離を計算
+	currentX, currentY := ebiten.TouchPosition(g.touchID)
+	dx := currentX - g.touchStartX
+	dy := currentY - g.touchStartY
+
+	// スワイプ距離がしきい値未満なら何もしない
+	absDx, absDy := dx, dy
+	if absDx < 0 {
+		absDx = -absDx
+	}
+	if absDy < 0 {
+		absDy = -absDy
+	}
+	if absDx < swipeThreshold && absDy < swipeThreshold {
+		return
+	}
+
+	// スワイプ方向を判定（X軸/Y軸で移動量が大きい方を採用）
+	if absDx > absDy {
+		// 横方向のスワイプ
+		if dx > 0 && g.direction != dirLeft {
+			g.nextDir = dirRight
+		} else if dx < 0 && g.direction != dirRight {
+			g.nextDir = dirLeft
+		}
+	} else {
+		// 縦方向のスワイプ
+		if dy > 0 && g.direction != dirUp {
+			g.nextDir = dirDown
+		} else if dy < 0 && g.direction != dirDown {
+			g.nextDir = dirUp
+		}
+	}
+
+	// スワイプ確定後、起点を更新して連続スワイプに対応
+	g.touchStartX = currentX
+	g.touchStartY = currentY
+}
+
+// isTapped はタッチがタップ（短いタッチ）だったかを判定する。
+// ゲームオーバー画面でのリスタート用。
+func (g *Game) isTapped() bool {
+	touchIDs := inpututil.AppendJustPressedTouchIDs(nil)
+	return len(touchIDs) > 0
+}
+
+// drawSprite はスプライト画像(128x128)をグリッドサイズに縮小して描画する。
 func drawSprite(screen *ebiten.Image, sprite *ebiten.Image, x, y float64) {
 	op := &ebiten.DrawImageOptions{}
 	// 128x128 → 20x20 に縮小
