@@ -63,11 +63,29 @@ Ebitengine を使ったクトゥルフ風スネークゲームの実装マイル
 - [x] 起動時に MP3 → PCM デコードしてメモリ保持
 - [x] 食べ物取得・ゲームオーバー時に SE 再生（音量50%）
 
-### M11: 仕上げ
+### M11: 尻尾スプライトの追加
+- [x] 尻尾スプライト（tail_up/down/left/right）を方向別マップで管理
+- [x] 前のセグメントの反対方向で尻尾の向きを決定
+
+### M12: 仕上げ
 - [x] 日本語コメントの付与（初心者向け）
 - [x] ドキュメント整備（ebitengine-guide, README, .gitignore）
-- [x] 作業ログ・マイルストーン更新
+- [x] 作業ログ・マイルストーン・セッションログ更新
 - [ ] 全機能の最終動作確認
+
+### M13: GitHub Pages 公開
+参考: [eihigh/wasmgame](https://github.com/eihigh/wasmgame/blob/main/README_ja.md)
+
+- [ ] WASM ビルド環境の整備
+  - `go run ./tool build` でブラウザ向けビルド（`game.wasm` + `wasm_exec.js` 生成）
+  - `go run ./tool serve` でローカル確認（localhost:8080）
+- [ ] `index.html` 作成（ゲーム埋め込み用 HTML）
+  - Layout の縦横比（640:480 = 4:3）と HTML 側の `aspect-ratio` を一致させる
+- [ ] GitHub Pages の有効化
+  - Settings > Pages > Source で「GitHub Actions」を選択
+- [ ] GitHub Actions ワークフロー作成（main push で自動デプロイ）
+- [ ] `https://<username>.github.io/<reponame>` で公開確認
+- [ ] 素材の読み込みを `embed` または `open` 関数経由に統一（WASM 対応）
 
 ## 今後の拡張案（未実装）
 - [ ] ハイスコアの保存
