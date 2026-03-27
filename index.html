@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Snake Game - Eldritch Tentacle Horror</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            background-color: #0a0a14;
+            color: #c0c0c0;
+            font-family: 'Courier New', monospace;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+        }
+        h1 {
+            color: #4a9e4a;
+            margin-bottom: 0.5rem;
+            font-size: 1.5rem;
+        }
+        #game-container {
+            width: min(640px, 95vw);
+            aspect-ratio: 4 / 3;
+            border: 2px solid #2a4a2a;
+            box-shadow: 0 0 20px rgba(0, 100, 0, 0.3);
+        }
+        #game-container canvas {
+            width: 100% !important;
+            height: 100% !important;
+        }
+        .controls {
+            margin-top: 1rem;
+            font-size: 0.85rem;
+            color: #808080;
+            text-align: center;
+        }
+        .controls kbd {
+            background: #1a1a2e;
+            border: 1px solid #333;
+            border-radius: 3px;
+            padding: 2px 6px;
+            font-family: inherit;
+        }
+        #loading {
+            color: #4a9e4a;
+            font-size: 1.2rem;
+        }
+    </style>
+</head>
+<body>
+    <h1>Snake Game - Eldritch Tentacle Horror</h1>
+    <div id="game-container">
+        <p id="loading">Loading...</p>
+    </div>
+    <div class="controls">
+        <kbd>Arrow Keys</kbd> Move &nbsp;
+        <kbd>Space</kbd> Pause &nbsp;
+        <kbd>Enter</kbd> Restart
+    </div>
+
+    <script src="wasm_exec.js"></script>
+    <script>
+        const go = new Go();
+        WebAssembly.instantiateStreaming(fetch("game.wasm"), go.importObject).then((result) => {
+            document.getElementById("loading").remove();
+            go.run(result.instance);
+        }).catch((err) => {
+            document.getElementById("loading").textContent = "Failed to load: " + err;
+        });
+    </script>
+</body>
+</html>

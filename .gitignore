@@ -1,5 +1,6 @@
 # Go build output
 snakegame_with_ebitengine
+game.wasm
 
 # macOS
 .DS_Store
