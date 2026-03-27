@@ -10,6 +10,7 @@
 package main
 
 import (
+	"bytes"
 	"embed"
 	"fmt"
 	"image/color"
@@ -18,6 +19,8 @@ import (
 	"math/rand"
 
 	"github.com/hajimehoshi/ebiten/v2"            // Ebitengineのコアパッケージ
+	"github.com/hajimehoshi/ebiten/v2/audio"      // オーディオ再生の基盤
+	"github.com/hajimehoshi/ebiten/v2/audio/mp3"  // MP3デコーダー
 	"github.com/hajimehoshi/ebiten/v2/ebitenutil" // 矩形描画やデバッグ表示などのユーティリティ
 	"github.com/hajimehoshi/ebiten/v2/inpututil"  // キーの「押された瞬間」判定用
 )
@@ -26,10 +29,10 @@ import (
 // アセットの埋め込み
 // ──────────────────────────────────────────────
 
-// go:embed ディレクティブで assets/ フォルダ内の全PNGファイルをバイナリに埋め込む。
+// go:embed ディレクティブで assets/ フォルダ内の画像・音声ファイルをバイナリに埋め込む。
 // これにより、実行ファイル単体でゲームが動作する（外部ファイル不要）。
 //
-//go:embed assets/*.png
+//go:embed assets/*.png assets/*.mp3
 var assetsFS embed.FS
 
 // ──────────────────────────────────────────────
@@ -46,7 +49,8 @@ const (
 	columns = screenWidth / gridSize  // グリッドの横マス数 (640/32 = 20マス)
 	rows    = screenHeight / gridSize // グリッドの縦マス数 (480/32 = 15マス)
 
-	spriteSize = 128 // 元スプライトのサイズ（128x128px）
+	spriteSize = 128   // 元スプライトのサイズ（128x128px）
+	sampleRate = 48000 // オーディオのサンプリングレート（Hz）
 )
 
 // ──────────────────────────────────────────────
@@ -107,6 +111,10 @@ var (
 
 	// 食べ物のスプライト（3種類からランダムに選ばれる）
 	foodSprites [3]*ebiten.Image
+
+	// オーディオ
+	audioCtx  = audio.NewContext(sampleRate) // オーディオコンテキスト（全体で1つ）
+	bgmPlayer *audio.Player                 // BGMプレイヤー（ループ再生用）
 )
 
 // spriteScale はスプライト(128px)をグリッド(20px)に収めるための縮小倍率。
@@ -157,6 +165,34 @@ func init() {
 	foodSprites[0] = loadImage("food_necronomicon")
 	foodSprites[1] = loadImage("food_brain")
 	foodSprites[2] = loadImage("food_elder_sign")
+
+	// BGM の読み込みとループ再生開始
+	initBGM()
+}
+
+// initBGM はBGMファイルを読み込み、音量30%で無限ループ再生を開始する。
+func initBGM() {
+	bgmData, err := assetsFS.ReadFile("assets/bgm.mp3")
+	if err != nil {
+		log.Fatalf("BGMの読み込みに失敗: %v", err)
+	}
+
+	// MP3をデコード（リサンプリングなし = 元の音質のまま）
+	stream, err := mp3.DecodeWithoutResampling(bytes.NewReader(bgmData))
+	if err != nil {
+		log.Fatalf("BGMのデコードに失敗: %v", err)
+	}
+
+	// 無限ループストリームを作成（曲の最後に達したら先頭に戻る）
+	loop := audio.NewInfiniteLoop(stream, stream.Length())
+
+	// プレイヤーを作成して再生開始
+	bgmPlayer, err = audioCtx.NewPlayer(loop)
+	if err != nil {
+		log.Fatalf("BGMプレイヤーの作成に失敗: %v", err)
+	}
+	bgmPlayer.SetVolume(0.3) // 音量30%
+	bgmPlayer.Play()
 }
 
 // ──────────────────────────────────────────────
