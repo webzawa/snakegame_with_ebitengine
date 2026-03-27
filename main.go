@@ -1,23 +1,35 @@
-// スネークゲーム - Ebitengineを使ったシンプルなスネークゲーム
+// スネークゲーム - Ebitengineを使ったクトゥルフ風スネークゲーム
 //
 // ゲームの流れ:
 //
-//	1. 蛇が画面中央からスタートし、自動的に移動する
-//	2. プレイヤーは矢印キーで蛇の方向を操作する
-//	3. 赤い食べ物を食べるとスコアが増え、蛇が伸びる
-//	4. 壁や自分の体にぶつかるとゲームオーバー
-//	5. Enter/Spaceキーでリスタート
+//  1. 触手の蛇が画面中央からスタートし、自動的に移動する
+//  2. プレイヤーは矢印キーで蛇の方向を操作する
+//  3. 食べ物（ネクロノミコン・脳・エルダーサイン）を食べるとスコアが増え、蛇が伸びる
+//  4. 壁や自分の体にぶつかるとゲームオーバー
+//  5. Enter/Spaceキーでリスタート
 package main
 
 import (
+	"embed"
 	"fmt"
 	"image/color"
+	"image/png"
 	"log"
 	"math/rand"
 
 	"github.com/hajimehoshi/ebiten/v2"            // Ebitengineのコアパッケージ
 	"github.com/hajimehoshi/ebiten/v2/ebitenutil" // 矩形描画やデバッグ表示などのユーティリティ
 )
+
+// ──────────────────────────────────────────────
+// アセットの埋め込み
+// ──────────────────────────────────────────────
+
+// go:embed ディレクティブで assets/ フォルダ内の全PNGファイルをバイナリに埋め込む。
+// これにより、実行ファイル単体でゲームが動作する（外部ファイル不要）。
+//
+//go:embed assets/*.png
+var assetsFS embed.FS
 
 // ──────────────────────────────────────────────
 // 定数の定義
@@ -32,6 +44,8 @@ const (
 
 	columns = screenWidth / gridSize  // グリッドの横マス数 (640/20 = 32マス)
 	rows    = screenHeight / gridSize // グリッドの縦マス数 (480/20 = 24マス)
+
+	spriteSize = 128 // 元スプライトのサイズ（128x128px）
 )
 
 // ──────────────────────────────────────────────
@@ -66,6 +80,85 @@ var dirDelta = map[int]Point{
 }
 
 // ──────────────────────────────────────────────
+// スプライト画像（パッケージレベル変数）
+// ──────────────────────────────────────────────
+
+// これらの変数は init() で一度だけ読み込まれ、全ゲームで共有される。
+// Ebitengineの *ebiten.Image はGPU上のテクスチャを表す。
+var (
+	// 背景画像（640x480、画面全体に描画）
+	backgroundImg *ebiten.Image
+
+	// 頭のスプライト（方向別に4枚。それぞれ事前に正しい向きで用意されている）
+	headSprites map[int]*ebiten.Image
+
+	// 体のスプライト
+	bodyVertical   *ebiten.Image // 縦方向の直線セグメント
+	bodyHorizontal *ebiten.Image // 横方向の直線セグメント
+
+	// カーブ（曲がり角）のスプライト
+	// 蛇が方向転換する箇所に使用。名前は曲がり角の位置を表す。
+	// 例: curveTopRight は「上と右を繋ぐカーブ」= 隣接セグメントが上と右にある
+	curveTopLeft     *ebiten.Image
+	curveTopRight    *ebiten.Image
+	curveBottomLeft  *ebiten.Image
+	curveBottomRight *ebiten.Image
+
+	// 食べ物のスプライト（3種類からランダムに選ばれる）
+	foodSprites [3]*ebiten.Image
+)
+
+// spriteScale はスプライト(128px)をグリッド(20px)に収めるための縮小倍率。
+var spriteScale = float64(gridSize) / float64(spriteSize)
+
+// loadImage は埋め込みファイルシステムからPNG画像を読み込み、
+// Ebitengineの画像オブジェクトに変換して返す。
+func loadImage(name string) *ebiten.Image {
+	f, err := assetsFS.Open("assets/" + name + ".png")
+	if err != nil {
+		log.Fatalf("画像の読み込みに失敗: %s: %v", name, err)
+	}
+	defer f.Close()
+
+	img, err := png.Decode(f)
+	if err != nil {
+		log.Fatalf("PNGのデコードに失敗: %s: %v", name, err)
+	}
+
+	return ebiten.NewImageFromImage(img)
+}
+
+// init はプログラム起動時に自動的に呼ばれる。
+// 全スプライト画像をここで一括読み込みする。
+func init() {
+	// 背景画像
+	backgroundImg = loadImage("background")
+
+	// 頭（方向別に4枚）
+	headSprites = map[int]*ebiten.Image{
+		dirUp:    loadImage("head_up"),
+		dirDown:  loadImage("head_down"),
+		dirLeft:  loadImage("head_left"),
+		dirRight: loadImage("head_right"),
+	}
+
+	// 体の直線セグメント
+	bodyVertical = loadImage("body_vertical")
+	bodyHorizontal = loadImage("body_horizontal")
+
+	// 体のカーブセグメント（4方向の曲がり角）
+	curveTopLeft = loadImage("body_segment_curved_top_left")
+	curveTopRight = loadImage("body_segment_curved_top_right")
+	curveBottomLeft = loadImage("body_segment_curved_bottom_left")
+	curveBottomRight = loadImage("body_segment_curved_bottom_right")
+
+	// 食べ物（ネクロノミコン、脳、エルダーサイン）
+	foodSprites[0] = loadImage("food_necronomicon")
+	foodSprites[1] = loadImage("food_brain")
+	foodSprites[2] = loadImage("food_elder_sign")
+}
+
+// ──────────────────────────────────────────────
 // Game 構造体（ebiten.Game インターフェースを実装）
 // ──────────────────────────────────────────────
 
@@ -78,6 +171,7 @@ type Game struct {
 	nextDir   int     // 次の移動時に適用される方向。入力を一時的にバッファリングすることで、
 	//                   1フレーム内に逆方向キーを押して即死するバグを防ぐ
 	food      Point // 食べ物の現在位置（グリッド座標）
+	foodType  int   // 食べ物の種類（0: ネクロノミコン, 1: 脳, 2: エルダーサイン）
 	score     int   // 現在のスコア（食べ物を食べた回数）
 	gameOver  bool  // ゲームオーバー状態かどうか
 	tickCount int   // フレームカウンタ。moveInterval に達するたびに蛇が1マス移動する
@@ -113,8 +207,10 @@ func NewGame() *Game {
 // ──────────────────────────────────────────────
 
 // spawnFood は蛇と重ならないランダムな位置に食べ物を配置する。
-// 蛇と重なった場合はやり直す（グリッドは32x24=768マスあるので、すぐ見つかる）。
+// 食べ物の種類（3種類）もランダムに決定する。
 func (g *Game) spawnFood() {
+	g.foodType = rand.Intn(3)
+
 	for {
 		// ランダムなグリッド座標を生成
 		g.food = Point{
@@ -241,32 +337,52 @@ func (g *Game) Update() error {
 // Draw はEbitengineから毎フレーム呼び出される。
 // screen は描画先の画像（ゲーム画面全体）。
 // 毎回画面をクリアしてから全てを描き直す（ダブルバッファリングはEbitengineが自動で行う）。
+// スプライト画像を使って蛇・食べ物・UIを描画する。
 func (g *Game) Draw(screen *ebiten.Image) {
+	// --- 背景画像の描画 ---
+	screen.DrawImage(backgroundImg, nil)
 
-	// 画面全体を黒で塗りつぶす（前フレームの描画をクリア）
-	screen.Fill(color.RGBA{0, 0, 0, 255}) // R=0, G=0, B=0, A=255（不透明な黒）
+	// --- 蛇の体の描画（頭以外のセグメント） ---
+	for i := 1; i < len(g.snake); i++ {
+		p := g.snake[i]
+		px, py := float64(p.X*gridSize), float64(p.Y*gridSize)
 
-	// --- 蛇の描画 ---
-	// 蛇の各マスを緑色の矩形として描画する
-	for _, p := range g.snake {
-		// グリッド座標 → ピクセル座標に変換して描画
-		// gridSize-1 にすることで、マス同士の間に1ピクセルの隙間ができ、見やすくなる
-		ebitenutil.DrawRect(screen,
-			float64(p.X*gridSize),      // X座標（ピクセル）: グリッドX × マスのサイズ
-			float64(p.Y*gridSize),      // Y座標（ピクセル）: グリッドY × マスのサイズ
-			float64(gridSize-1),        // 幅: 19ピクセル（1ピクセルの隙間を作る）
-			float64(gridSize-1),        // 高さ: 19ピクセル
-			color.RGBA{0, 220, 0, 255}) // 緑色
+		if i < len(g.snake)-1 {
+			// 中間セグメント: 前後のセグメントを見て直線/カーブを判定
+			prev := g.snake[i-1] // 頭側の隣接セグメント
+			next := g.snake[i+1] // 尻尾側の隣接セグメント
+
+			if prev.X == next.X {
+				// 前後が同じX座標 → 縦方向の直線
+				drawSprite(screen, bodyVertical, px, py)
+			} else if prev.Y == next.Y {
+				// 前後が同じY座標 → 横方向の直線
+				drawSprite(screen, bodyHorizontal, px, py)
+			} else {
+				// 前後が異なる軸 → カーブ（曲がり角）
+				curve := getCurveSprite(p, prev, next)
+				drawSprite(screen, curve, px, py)
+			}
+		} else {
+			// 尻尾（最後のセグメント）: 一つ前のセグメントとの位置関係で直線を選択
+			prev := g.snake[i-1]
+			if prev.X == p.X {
+				drawSprite(screen, bodyVertical, px, py)
+			} else {
+				drawSprite(screen, bodyHorizontal, px, py)
+			}
+		}
 	}
 
 	// --- 食べ物の描画 ---
-	// 食べ物を赤色の矩形として描画する
-	ebitenutil.DrawRect(screen,
-		float64(g.food.X*gridSize),
-		float64(g.food.Y*gridSize),
-		float64(gridSize-1),
-		float64(gridSize-1),
-		color.RGBA{220, 0, 0, 255}) // 赤色
+	drawSprite(screen, foodSprites[g.foodType],
+		float64(g.food.X*gridSize), float64(g.food.Y*gridSize))
+
+	// --- 頭の描画 ---
+	// 方向別に事前に用意されたスプライトを使うので、回転処理は不要
+	head := g.snake[0]
+	drawSprite(screen, headSprites[g.direction],
+		float64(head.X*gridSize), float64(head.Y*gridSize))
 
 	// --- スコアの表示 ---
 	// 画面の左上にスコアを表示する（DebugPrint は常に左上に表示される）
@@ -276,8 +392,53 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	// ゲームオーバー状態の場合、画面中央にメッセージを表示する
 	if g.gameOver {
 		// DebugPrintAt を使って指定位置にテキストを表示
+		// 半透明の黒オーバーレイを描画して視認性を上げる
+		overlay := ebiten.NewImage(screenWidth, screenHeight)
+		overlay.Fill(color.RGBA{0, 0, 0, 160})
+		screen.DrawImage(overlay, nil)
+
 		ebitenutil.DebugPrintAt(screen, "GAME OVER", screenWidth/2-30, screenHeight/2-10)
 		ebitenutil.DebugPrintAt(screen, "Press Enter or Space to restart", screenWidth/2-95, screenHeight/2+10)
+	}
+}
+
+// drawSprite はスプライト画像(128x128)をグリッドサイズ(20x20)に縮小して描画する。
+func drawSprite(screen *ebiten.Image, sprite *ebiten.Image, x, y float64) {
+	op := &ebiten.DrawImageOptions{}
+	// 128x128 → 20x20 に縮小
+	op.GeoM.Scale(spriteScale, spriteScale)
+	// 画面上の指定位置に配置
+	op.GeoM.Translate(x, y)
+	screen.DrawImage(sprite, op)
+}
+
+// getCurveSprite は体のカーブセグメントに使うスプライトを返す。
+// 現在のセグメント位置(p)と、頭側(prev)・尻尾側(next)の隣接セグメントの位置から、
+// 4種類のカーブスプライトのどれを使うか判定する。
+//
+// カーブの名前は「繋がる2方向」を表す:
+//
+//	top_right:    上と右を繋ぐ角（隣接セグメントが上と右にある）
+//	top_left:     上と左を繋ぐ角
+//	bottom_right: 下と右を繋ぐ角
+//	bottom_left:  下と左を繋ぐ角
+func getCurveSprite(p, prev, next Point) *ebiten.Image {
+	hasUp := (prev.Y < p.Y) || (next.Y < p.Y)
+	hasDown := (prev.Y > p.Y) || (next.Y > p.Y)
+	hasLeft := (prev.X < p.X) || (next.X < p.X)
+	hasRight := (prev.X > p.X) || (next.X > p.X)
+
+	switch {
+	case hasUp && hasRight:
+		return curveTopRight
+	case hasUp && hasLeft:
+		return curveTopLeft
+	case hasDown && hasRight:
+		return curveBottomRight
+	case hasDown && hasLeft:
+		return curveBottomLeft
+	default:
+		return curveTopRight // フォールバック
 	}
 }
 
@@ -286,9 +447,7 @@ func (g *Game) Draw(screen *ebiten.Image) {
 // ──────────────────────────────────────────────
 
 // Layout はEbitengineから呼び出され、ゲームの論理的な画面サイズを返す。
-// outsideWidth, outsideHeight はウィンドウの実際のサイズ（ユーザーがリサイズした場合など）。
-// ここでは固定サイズを返しているので、ウィンドウサイズが変わっても
-// ゲーム内の解像度は常に 640x480 で、Ebitengineが自動的にスケーリングしてくれる。
+// 固定サイズを返すので、ウィンドウサイズが変わってもEbitengineが自動スケーリングする。
 func (g *Game) Layout(outsideWidth, outsideHeight int) (int, int) {
 	return screenWidth, screenHeight
 }
