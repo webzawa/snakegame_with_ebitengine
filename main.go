@@ -2,11 +2,12 @@
 //
 // ゲームの流れ:
 //
-//  1. 触手の蛇が画面中央からスタートし、自動的に移動する
-//  2. プレイヤーは矢印キーで蛇の方向を操作する
-//  3. 食べ物（ネクロノミコン・脳・エルダーサイン）を食べるとスコアが増え、蛇が伸びる
-//  4. 壁や自分の体にぶつかるとゲームオーバー
-//  5. Enter/Spaceキーでリスタート
+//  1. タイトル画面で難易度を選択（Easy / Normal / Hard）
+//  2. 触手の蛇が画面中央からスタートし、自動的に移動する
+//  3. プレイヤーは矢印キー or スワイプで蛇の方向を操作する
+//  4. 食べ物（ネクロノミコン・脳・エルダーサイン）を食べるとスコアが増え、蛇が伸びる
+//  5. 壁や自分の体にぶつかるとゲームオーバー
+//  6. タイトル画面に戻って再挑戦
 package main
 
 import (
@@ -19,192 +20,124 @@ import (
 	"log"
 	"math/rand"
 
-	"github.com/hajimehoshi/ebiten/v2"            // Ebitengineのコアパッケージ
-	"github.com/hajimehoshi/ebiten/v2/audio"      // オーディオ再生の基盤
-	"github.com/hajimehoshi/ebiten/v2/audio/mp3"  // MP3デコーダー
-	"github.com/hajimehoshi/ebiten/v2/ebitenutil" // 矩形描画やデバッグ表示などのユーティリティ
-	"github.com/hajimehoshi/ebiten/v2/inpututil"  // キーの「押された瞬間」判定用
+	"github.com/hajimehoshi/ebiten/v2"
+	"github.com/hajimehoshi/ebiten/v2/audio"
+	"github.com/hajimehoshi/ebiten/v2/audio/mp3"
+	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
+	"github.com/hajimehoshi/ebiten/v2/inpututil"
 )
 
 // ──────────────────────────────────────────────
 // アセットの埋め込み
 // ──────────────────────────────────────────────
 
-// go:embed ディレクティブで assets/ フォルダ内の画像・音声ファイルをバイナリに埋め込む。
-// これにより、実行ファイル単体でゲームが動作する（外部ファイル不要）。
-//
 //go:embed assets/*.png assets/*.mp3
 var assetsFS embed.FS
 
 // ──────────────────────────────────────────────
-// 定数の定義
+// 定数
 // ──────────────────────────────────────────────
 
 const (
-	screenWidth  = 640 // ゲームウィンドウの幅（ピクセル）
-	screenHeight = 480 // ゲームウィンドウの高さ（ピクセル）
-	gridSize     = 32  // 1マスのサイズ（ピクセル）。蛇も食べ物もこのサイズで描画される
-	moveInterval = 15  // 蛇が移動する間隔（フレーム数）。Update()は毎秒60回呼ばれるので、
-	//                    15フレームごと = 4回/秒の移動速度になる
-
-	columns = screenWidth / gridSize  // グリッドの横マス数 (640/32 = 20マス)
-	rows    = screenHeight / gridSize // グリッドの縦マス数 (480/32 = 15マス)
-
-	spriteSize = 128   // 元スプライトのサイズ（128x128px）
-	sampleRate = 48000 // オーディオのサンプリングレート（Hz）
+	screenWidth  = 640
+	screenHeight = 480
+	gridSize     = 32
+	columns      = screenWidth / gridSize  // 20
+	rows         = screenHeight / gridSize // 15
+	spriteSize   = 128
+	sampleRate   = 48000
+	swipeThreshold = 16
 )
 
-// ──────────────────────────────────────────────
-// 方向の定数（iota を使って連番を自動生成）
-// ──────────────────────────────────────────────
-
+// シーン
 const (
-	dirUp    = iota // 0: 上方向
-	dirDown         // 1: 下方向
-	dirLeft         // 2: 左方向
-	dirRight        // 3: 右方向
+	sceneTitle    = iota // タイトル画面
+	scenePlaying         // プレイ中
+	sceneGameOver        // ゲームオーバー
 )
 
+// 難易度
+const (
+	diffEasy   = iota
+	diffNormal
+	diffHard
+)
+
+// 方向
+const (
+	dirUp = iota
+	dirDown
+	dirLeft
+	dirRight
+)
+
+// 難易度ごとの移動間隔（フレーム数）。値が小さいほど速い。
+var difficultySpeed = [3]int{20, 12, 7}
+var difficultyName = [3]string{"EASY", "NORMAL", "HARD"}
+var difficultyColor = [3]color.RGBA{
+	{0, 180, 0, 255},   // Easy: 緑
+	{200, 180, 0, 255}, // Normal: 黄
+	{220, 40, 40, 255}, // Hard: 赤
+}
+
 // ──────────────────────────────────────────────
-// 型の定義
+// 型
 // ──────────────────────────────────────────────
 
-// Point はグリッド上の座標を表す構造体。
-// ピクセル座標ではなく、マス目の位置（0〜31, 0〜23）を保持する。
 type Point struct {
 	X, Y int
 }
 
-// dirDelta は各方向に対応する移動量を定義するマップ。
-// 例えば dirUp（上方向）の場合、Xは変化なし(0)、Yは-1（上に1マス移動）。
-// ※ Ebitengineの座標系では、Y軸は下方向が正なので、上に移動 = Y が減る
 var dirDelta = map[int]Point{
-	dirUp:    {0, -1}, // 上: Y座標を1減らす
-	dirDown:  {0, 1},  // 下: Y座標を1増やす
-	dirLeft:  {-1, 0}, // 左: X座標を1減らす
-	dirRight: {1, 0},  // 右: X座標を1増やす
+	dirUp: {0, -1}, dirDown: {0, 1}, dirLeft: {-1, 0}, dirRight: {1, 0},
 }
 
 // ──────────────────────────────────────────────
-// スプライト画像（パッケージレベル変数）
+// スプライト・オーディオ（パッケージレベル変数）
 // ──────────────────────────────────────────────
 
-// これらの変数は init() で一度だけ読み込まれ、全ゲームで共有される。
-// Ebitengineの *ebiten.Image はGPU上のテクスチャを表す。
 var (
-	// 背景画像（640x480、画面全体に描画）
-	backgroundImg *ebiten.Image
-
-	// 頭のスプライト（方向別に4枚。それぞれ事前に正しい向きで用意されている）
-	headSprites map[int]*ebiten.Image
-
-	// 体のスプライト
-	bodyVertical   *ebiten.Image // 縦方向の直線セグメント
-	bodyHorizontal *ebiten.Image // 横方向の直線セグメント
-
-	// カーブ（曲がり角）のスプライト
-	// 蛇が方向転換する箇所に使用。名前は曲がり角の位置を表す。
-	// 例: curveTopRight は「上と右を繋ぐカーブ」= 隣接セグメントが上と右にある
+	backgroundImg    *ebiten.Image
+	headSprites      map[int]*ebiten.Image
+	tailSprites      map[int]*ebiten.Image
+	bodyVertical     *ebiten.Image
+	bodyHorizontal   *ebiten.Image
 	curveTopLeft     *ebiten.Image
 	curveTopRight    *ebiten.Image
 	curveBottomLeft  *ebiten.Image
 	curveBottomRight *ebiten.Image
+	foodSprites      [3]*ebiten.Image
 
-	// 尻尾のスプライト（方向別に4枚。尻尾が伸びていく方向で選択）
-	tailSprites map[int]*ebiten.Image
-
-	// 食べ物のスプライト（3種類からランダムに選ばれる）
-	foodSprites [3]*ebiten.Image
-
-	// オーディオ
-	audioCtx  = audio.NewContext(sampleRate) // オーディオコンテキスト（全体で1つ）
-	bgmPlayer *audio.Player                  // BGMプレイヤー（ループ再生用）
-
-	// SE（効果音）のデコード済みデータ
-	// 毎回再生するたびにデコードし直すのは無駄なので、起動時にデコードして保持する
-	seEatData      []byte // 食べ物を食べた時のSE
-	seGameOverData []byte // ゲームオーバー時のSE
+	audioCtx       = audio.NewContext(sampleRate)
+	bgmPlayer      *audio.Player
+	seEatData      []byte
+	seGameOverData []byte
 )
 
-// spriteScale はスプライト(128px)をグリッド(20px)に収めるための縮小倍率。
 var spriteScale = float64(gridSize) / float64(spriteSize)
 
-// loadImage は埋め込みファイルシステムからPNG画像を読み込み、
-// Ebitengineの画像オブジェクトに変換して返す。
 func loadImage(name string) *ebiten.Image {
 	f, err := assetsFS.Open("assets/" + name + ".png")
 	if err != nil {
 		log.Fatalf("画像の読み込みに失敗: %s: %v", name, err)
 	}
 	defer f.Close()
-
 	img, err := png.Decode(f)
 	if err != nil {
 		log.Fatalf("PNGのデコードに失敗: %s: %v", name, err)
 	}
-
 	return ebiten.NewImageFromImage(img)
 }
 
-// init はプログラム起動時に自動的に呼ばれる。
-// 全スプライト画像をここで一括読み込みする。
-func init() {
-	// 背景画像
-	backgroundImg = loadImage("background")
-
-	// 頭（方向別に4枚）
-	headSprites = map[int]*ebiten.Image{
-		dirUp:    loadImage("head_up"),
-		dirDown:  loadImage("head_down"),
-		dirLeft:  loadImage("head_left"),
-		dirRight: loadImage("head_right"),
-	}
-
-	// 尻尾（方向別に4枚）
-	tailSprites = map[int]*ebiten.Image{
-		dirUp:    loadImage("tail_up"),
-		dirDown:  loadImage("tail_down"),
-		dirLeft:  loadImage("tail_left"),
-		dirRight: loadImage("tail_right"),
-	}
-
-	// 体の直線セグメント
-	bodyVertical = loadImage("body_vertical")
-	bodyHorizontal = loadImage("body_horizontal")
-
-	// 体のカーブセグメント（4方向の曲がり角）
-	curveTopLeft = loadImage("body_segment_curved_top_left")
-	curveTopRight = loadImage("body_segment_curved_top_right")
-	curveBottomLeft = loadImage("body_segment_curved_bottom_left")
-	curveBottomRight = loadImage("body_segment_curved_bottom_right")
-
-	// 食べ物（ネクロノミコン、脳、エルダーサイン）
-	foodSprites[0] = loadImage("food_necronomicon")
-	foodSprites[1] = loadImage("food_brain")
-	foodSprites[2] = loadImage("food_elder_sign")
-
-	// SE（効果音）のデコード済みPCMデータを準備
-	seEatData = decodeSE("se_eat")
-	seGameOverData = decodeSE("se_gameover")
-
-	// BGM の読み込みとループ再生開始
-	initBGM()
-}
-
-// decodeSE はMP3の効果音ファイルを読み込み、デコード済みPCMバイト列を返す。
-// 毎回再生のたびにデコードするのではなく、起動時に一度だけデコードしてメモリに保持する。
 func decodeSE(name string) []byte {
 	data, err := assetsFS.ReadFile("assets/" + name + ".mp3")
 	if err != nil {
 		log.Fatalf("SEの読み込みに失敗: %s: %v", name, err)
 	}
-
 	stream, err := mp3.DecodeWithoutResampling(bytes.NewReader(data))
 	if err != nil {
 		log.Fatalf("SEのデコードに失敗: %s: %v", name, err)
 	}
-
-	// デコード済みPCMデータを全て読み出す
 	decoded, err := io.ReadAll(stream)
 	if err != nil {
 		log.Fatalf("SEの読み出しに失敗: %s: %v", name, err)
@@ -212,110 +145,121 @@ func decodeSE(name string) []byte {
 	return decoded
 }
 
-// playSE はデコード済みPCMデータからプレイヤーを作成して再生する。
-// 毎回新しいプレイヤーを作成するため、同じSEの重複再生も可能。
 func playSE(data []byte) {
 	player, err := audioCtx.NewPlayer(bytes.NewReader(data))
 	if err != nil {
-		return // SEの再生失敗はゲームを止めるほどではないので無視
+		return
 	}
-	player.SetVolume(0.5) // SE音量50%
+	player.SetVolume(0.5)
 	player.Play()
 }
 
-// initBGM はBGMファイルを読み込み、音量30%で無限ループ再生を開始する。
 func initBGM() {
 	bgmData, err := assetsFS.ReadFile("assets/bgm.mp3")
 	if err != nil {
 		log.Fatalf("BGMの読み込みに失敗: %v", err)
 	}
-
-	// MP3をデコード（リサンプリングなし = 元の音質のまま）
 	stream, err := mp3.DecodeWithoutResampling(bytes.NewReader(bgmData))
 	if err != nil {
 		log.Fatalf("BGMのデコードに失敗: %v", err)
 	}
-
-	// 無限ループストリームを作成（曲の最後に達したら先頭に戻る）
 	loop := audio.NewInfiniteLoop(stream, stream.Length())
-
-	// プレイヤーを作成して再生開始
 	bgmPlayer, err = audioCtx.NewPlayer(loop)
 	if err != nil {
 		log.Fatalf("BGMプレイヤーの作成に失敗: %v", err)
 	}
-	bgmPlayer.SetVolume(0.3) // 音量30%
+	bgmPlayer.SetVolume(0.3)
 	bgmPlayer.Play()
 }
 
-// ──────────────────────────────────────────────
-// Game 構造体（ebiten.Game インターフェースを実装）
-// ──────────────────────────────────────────────
+func init() {
+	backgroundImg = loadImage("background")
 
-// Game はゲーム全体の状態を保持する構造体。
-// Ebitengineでは、この構造体に Update(), Draw(), Layout() の3つのメソッドを
-// 実装することでゲームが動作する。
-type Game struct {
-	snake     []Point // 蛇の体を構成するマス目の座標のスライス。snake[0] が頭、末尾が尻尾
-	direction int     // 蛇の現在の移動方向（dirUp, dirDown, dirLeft, dirRight のいずれか）
-	nextDir   int     // 次の移動時に適用される方向。入力を一時的にバッファリングすることで、
-	//                   1フレーム内に逆方向キーを押して即死するバグを防ぐ
-	food      Point // 食べ物の現在位置（グリッド座標）
-	foodType  int   // 食べ物の種類（0: ネクロノミコン, 1: 脳, 2: エルダーサイン）
-	score     int   // 現在のスコア（食べ物を食べた回数）
-	gameOver  bool  // ゲームオーバー状態かどうか
-	paused    bool  // 一時停止中かどうか（Spaceキーでトグル）
-	tickCount int   // フレームカウンタ。moveInterval に達するたびに蛇が1マス移動する
+	headSprites = map[int]*ebiten.Image{
+		dirUp: loadImage("head_up"), dirDown: loadImage("head_down"),
+		dirLeft: loadImage("head_left"), dirRight: loadImage("head_right"),
+	}
+	tailSprites = map[int]*ebiten.Image{
+		dirUp: loadImage("tail_up"), dirDown: loadImage("tail_down"),
+		dirLeft: loadImage("tail_left"), dirRight: loadImage("tail_right"),
+	}
 
-	// タッチ操作用（スマホ・タブレット対応）
-	touchID      ebiten.TouchID // 現在追跡中のタッチID
-	touchStartX  int            // タッチ開始X座標
-	touchStartY  int            // タッチ開始Y座標
-	touchTracking bool          // タッチを追跡中かどうか
+	bodyVertical = loadImage("body_vertical")
+	bodyHorizontal = loadImage("body_horizontal")
+	curveTopLeft = loadImage("body_segment_curved_top_left")
+	curveTopRight = loadImage("body_segment_curved_top_right")
+	curveBottomLeft = loadImage("body_segment_curved_bottom_left")
+	curveBottomRight = loadImage("body_segment_curved_bottom_right")
+
+	foodSprites[0] = loadImage("food_necronomicon")
+	foodSprites[1] = loadImage("food_brain")
+	foodSprites[2] = loadImage("food_elder_sign")
+
+	seEatData = decodeSE("se_eat")
+	seGameOverData = decodeSE("se_gameover")
+	initBGM()
 }
 
 // ──────────────────────────────────────────────
-// ゲームの初期化
+// Game 構造体
 // ──────────────────────────────────────────────
 
-// NewGame はゲームの初期状態を作成して返す。
-// ゲーム開始時とリスタート時に呼ばれる。
-func NewGame() *Game {
-	g := &Game{
-		direction: dirRight, // 初期方向: 右向き
-		nextDir:   dirRight, // 次の方向も右向きで初期化
-	}
+type Game struct {
+	scene      int // sceneTitle, scenePlaying, sceneGameOver
+	difficulty int // diffEasy, diffNormal, diffHard
 
-	// 蛇の初期位置: 画面中央に3マス分の蛇を横向きに配置
-	// centerX=16, centerY=12 の場合、蛇は (16,12), (15,12), (14,12) の3マス
+	// プレイ中の状態
+	snake     []Point
+	direction int
+	nextDir   int
+	food      Point
+	foodType  int
+	score     int
+	paused    bool
+	tickCount int
+
+	// タイトル画面
+	selectedDiff int // カーソル位置（0〜2）
+
+	// タッチ操作
+	touchID       ebiten.TouchID
+	touchStartX   int
+	touchStartY   int
+	touchTracking bool
+
+	// アニメーション用カウンタ
+	frameCount int
+}
+
+func NewGame() *Game {
+	return &Game{
+		scene:        sceneTitle,
+		selectedDiff: diffNormal, // デフォルト: Normal
+	}
+}
+
+func (g *Game) startPlaying() {
+	g.scene = scenePlaying
+	g.difficulty = g.selectedDiff
+	g.paused = false
+	g.tickCount = 0
+	g.score = 0
+	g.direction = dirRight
+	g.nextDir = dirRight
+	g.snake = nil
+
 	centerX := columns / 2
 	centerY := rows / 2
 	for i := 0; i < 3; i++ {
 		g.snake = append(g.snake, Point{X: centerX - i, Y: centerY})
 	}
-
-	// 食べ物を最初の位置に配置
 	g.spawnFood()
-	return g
 }
 
-// ──────────────────────────────────────────────
-// 食べ物の生成
-// ──────────────────────────────────────────────
-
-// spawnFood は蛇と重ならないランダムな位置に食べ物を配置する。
-// 食べ物の種類（3種類）もランダムに決定する。
 func (g *Game) spawnFood() {
 	g.foodType = rand.Intn(3)
-
 	for {
-		// ランダムなグリッド座標を生成
-		g.food = Point{
-			X: rand.Intn(columns), // 0 〜 31 のランダムな整数
-			Y: rand.Intn(rows),    // 0 〜 23 のランダムな整数
-		}
-
-		// 蛇の体と重なっていないかチェック
+		g.food = Point{X: rand.Intn(columns), Y: rand.Intn(rows)}
 		overlap := false
 		for _, p := range g.snake {
 			if p == g.food {
@@ -323,47 +267,106 @@ func (g *Game) spawnFood() {
 				break
 			}
 		}
-
-		// 重なっていなければ、この位置に決定して終了
 		if !overlap {
 			return
 		}
-		// 重なっていたら、forループの先頭に戻って別の位置を試す
 	}
 }
 
 // ──────────────────────────────────────────────
-// Update() - ゲームロジックの更新（毎秒60回呼ばれる）
+// Update
 // ──────────────────────────────────────────────
 
-// Update はEbitengineから毎秒60回（60TPS）呼び出される。
-// ここでキー入力の処理、蛇の移動、衝突判定などのゲームロジックを行う。
-// error を返すとゲームが終了する（通常は nil を返す）。
 func (g *Game) Update() error {
-
-	// --- タッチ入力の処理（スマホ・タブレット対応） ---
+	g.frameCount++
 	g.handleTouch()
 
-	// --- ゲームオーバー中の処理 ---
-	// Enter キーまたはタップでリスタート
-	if g.gameOver {
-		if ebiten.IsKeyPressed(ebiten.KeyEnter) || g.isTapped() {
-			*g = *NewGame()
-		}
-		return nil
+	switch g.scene {
+	case sceneTitle:
+		g.updateTitle()
+	case scenePlaying:
+		g.updatePlaying()
+	case sceneGameOver:
+		g.updateGameOver()
+	}
+	return nil
+}
+
+func (g *Game) updateTitle() {
+	// キーボードで難易度選択
+	if inpututil.IsKeyJustPressed(ebiten.KeyArrowUp) {
+		g.selectedDiff = (g.selectedDiff + 2) % 3 // 上に移動
+	}
+	if inpututil.IsKeyJustPressed(ebiten.KeyArrowDown) {
+		g.selectedDiff = (g.selectedDiff + 1) % 3 // 下に移動
+	}
+	if inpututil.IsKeyJustPressed(ebiten.KeyEnter) || inpututil.IsKeyJustPressed(ebiten.KeySpace) {
+		g.startPlaying()
+		return
+	}
+	// 数字キーでも選択可能
+	if inpututil.IsKeyJustPressed(ebiten.Key1) {
+		g.selectedDiff = diffEasy
+		g.startPlaying()
+		return
+	}
+	if inpututil.IsKeyJustPressed(ebiten.Key2) {
+		g.selectedDiff = diffNormal
+		g.startPlaying()
+		return
+	}
+	if inpututil.IsKeyJustPressed(ebiten.Key3) {
+		g.selectedDiff = diffHard
+		g.startPlaying()
+		return
 	}
 
-	// --- 一時停止の切り替え ---
+	// タッチでボタンタップ
+	touchIDs := inpututil.AppendJustPressedTouchIDs(nil)
+	for _, id := range touchIDs {
+		tx, ty := ebiten.TouchPosition(id)
+		for i := 0; i < 3; i++ {
+			bx, by, bw, bh := g.diffButtonRect(i)
+			if tx >= bx && tx <= bx+bw && ty >= by && ty <= by+bh {
+				g.selectedDiff = i
+				g.startPlaying()
+				return
+			}
+		}
+	}
+}
+
+func (g *Game) updatePlaying() {
+	// ポーズ切り替え（キーボード: Space）
 	if inpututil.IsKeyJustPressed(ebiten.KeySpace) {
 		g.paused = !g.paused
 	}
-	if g.paused {
-		return nil
+
+	// ポーズボタンのタッチ判定（右上の⏸エリア）
+	touchIDs := inpututil.AppendJustPressedTouchIDs(nil)
+	for _, id := range touchIDs {
+		tx, ty := ebiten.TouchPosition(id)
+		px, py, pw, ph := g.pauseButtonRect()
+		if tx >= px && tx <= px+pw && ty >= py && ty <= py+ph {
+			g.paused = !g.paused
+			return
+		}
 	}
 
-	// --- キー入力の処理 ---
-	// 矢印キーの入力を nextDir に保存する。
-	// ただし、現在の進行方向と真逆の方向は無視する（即死防止）。
+	if g.paused {
+		// ポーズ中: タップで再開（ポーズボタン以外の領域）
+		for _, id := range touchIDs {
+			tx, ty := ebiten.TouchPosition(id)
+			px, py, pw, ph := g.pauseButtonRect()
+			if !(tx >= px && tx <= px+pw && ty >= py && ty <= py+ph) {
+				g.paused = false
+				return
+			}
+		}
+		return
+	}
+
+	// キー入力
 	if ebiten.IsKeyPressed(ebiten.KeyArrowUp) && g.direction != dirDown {
 		g.nextDir = dirUp
 	} else if ebiten.IsKeyPressed(ebiten.KeyArrowDown) && g.direction != dirUp {
@@ -374,113 +377,150 @@ func (g *Game) Update() error {
 		g.nextDir = dirRight
 	}
 
-	// --- 移動タイミングの制御 ---
-	// Update() は毎秒60回呼ばれるが、蛇を毎フレーム動かすと速すぎる。
-	// tickCount をカウントアップし、moveInterval(=8) フレームごとに1回だけ蛇を動かす。
+	// 移動タイミング
 	g.tickCount++
-	if g.tickCount < moveInterval {
-		return nil // まだ移動タイミングでないので何もしない
+	if g.tickCount < difficultySpeed[g.difficulty] {
+		return
 	}
-	g.tickCount = 0 // カウンタをリセット
+	g.tickCount = 0
 
-	// --- 蛇の移動処理 ---
-	// バッファリングしていた nextDir を実際の direction に適用
+	// 蛇の移動
 	g.direction = g.nextDir
-
-	// 現在の方向に対応する移動量（delta）を取得
 	delta := dirDelta[g.direction]
+	newHead := Point{X: g.snake[0].X + delta.X, Y: g.snake[0].Y + delta.Y}
 
-	// 新しい頭の位置を計算（現在の頭の位置 + 移動量）
-	newHead := Point{
-		X: g.snake[0].X + delta.X,
-		Y: g.snake[0].Y + delta.Y,
-	}
-
-	// --- 壁との衝突判定 ---
-	// 新しい頭の位置がグリッドの範囲外に出たらゲームオーバー
+	// 壁衝突
 	if newHead.X < 0 || newHead.X >= columns || newHead.Y < 0 || newHead.Y >= rows {
-		g.gameOver = true
+		g.scene = sceneGameOver
 		playSE(seGameOverData)
-		return nil
+		return
 	}
 
-	// --- 自分自身との衝突判定 ---
-	// 新しい頭の位置が蛇の体のどこかと重なったらゲームオーバー
+	// 自身衝突
 	for _, p := range g.snake {
 		if p == newHead {
-			g.gameOver = true
+			g.scene = sceneGameOver
 			playSE(seGameOverData)
-			return nil
+			return
 		}
 	}
 
-	// --- 蛇を前に進める ---
-	// 新しい頭をスライスの先頭に追加する
-	// append([]Point{newHead}, g.snake...) で「新しい頭 + 既存の体」の新しいスライスを作る
 	g.snake = append([]Point{newHead}, g.snake...)
 
-	// --- 食べ物の判定 ---
 	if newHead == g.food {
-		// 食べ物を食べた場合:
-		// - スコアを1増やす
-		// - 新しい食べ物を生成する
-		// - 尻尾は削除しない（= 蛇が1マス伸びる）
 		g.score++
 		g.spawnFood()
 		playSE(seEatData)
 	} else {
-		// 食べ物を食べていない場合:
-		// - 尻尾の最後の1マスを削除する（= 蛇の長さを維持して前に進む）
-		// スライスの末尾を切り詰めることで尻尾を削除
 		g.snake = g.snake[:len(g.snake)-1]
 	}
+}
 
-	return nil
+func (g *Game) updateGameOver() {
+	// Enter / タップでタイトルに戻る
+	if inpututil.IsKeyJustPressed(ebiten.KeyEnter) || inpututil.IsKeyJustPressed(ebiten.KeySpace) {
+		g.scene = sceneTitle
+		return
+	}
+	touchIDs := inpututil.AppendJustPressedTouchIDs(nil)
+	if len(touchIDs) > 0 {
+		g.scene = sceneTitle
+	}
 }
 
 // ──────────────────────────────────────────────
-// Draw() - 画面の描画（毎フレーム呼ばれる）
+// Draw
 // ──────────────────────────────────────────────
 
-// Draw はEbitengineから毎フレーム呼び出される。
-// screen は描画先の画像（ゲーム画面全体）。
-// 毎回画面をクリアしてから全てを描き直す（ダブルバッファリングはEbitengineが自動で行う）。
-// スプライト画像を使って蛇・食べ物・UIを描画する。
 func (g *Game) Draw(screen *ebiten.Image) {
-	// --- 背景画像の描画（暗めに描画してスプライトを目立たせる） ---
+	switch g.scene {
+	case sceneTitle:
+		g.drawTitle(screen)
+	case scenePlaying:
+		g.drawPlaying(screen)
+		if g.paused {
+			g.drawPauseOverlay(screen)
+		}
+	case sceneGameOver:
+		g.drawPlaying(screen) // ゲーム画面を背景に
+		g.drawGameOver(screen)
+	}
+}
+
+func (g *Game) drawTitle(screen *ebiten.Image) {
+	// 背景（暗め）
 	op := &ebiten.DrawImageOptions{}
-	op.ColorScale.Scale(0.3, 0.3, 0.3, 1) // RGB を 30% に減光
+	op.ColorScale.Scale(0.15, 0.15, 0.15, 1)
 	screen.DrawImage(backgroundImg, op)
 
-	// --- 蛇の体の描画（頭以外のセグメント） ---
+	// タイトル
+	titleY := 100
+	ebitenutil.DebugPrintAt(screen, "SNAKE GAME", screenWidth/2-32, titleY)
+	ebitenutil.DebugPrintAt(screen, "~ Eldritch Tentacle Horror ~", screenWidth/2-90, titleY+20)
+
+	// 難易度ボタン
+	for i := 0; i < 3; i++ {
+		bx, by, bw, bh := g.diffButtonRect(i)
+
+		// ボタン背景
+		btnColor := color.RGBA{30, 30, 50, 255}
+		if i == g.selectedDiff {
+			btnColor = color.RGBA{40, 60, 40, 255}
+		}
+		ebitenutil.DrawRect(screen, float64(bx), float64(by), float64(bw), float64(bh), btnColor)
+
+		// ボタン枠
+		borderColor := color.RGBA{60, 60, 80, 255}
+		if i == g.selectedDiff {
+			borderColor = difficultyColor[i]
+		}
+		drawBorder(screen, bx, by, bw, bh, borderColor)
+
+		// ラベル
+		label := fmt.Sprintf("[%d] %s", i+1, difficultyName[i])
+		labelX := bx + bw/2 - len(label)*3
+		labelY := by + bh/2 - 4
+		ebitenutil.DebugPrintAt(screen, label, labelX, labelY)
+
+		// 選択中インジケータ
+		if i == g.selectedDiff {
+			ebitenutil.DebugPrintAt(screen, ">", bx+8, labelY)
+		}
+	}
+
+	// 操作説明
+	helpY := 370
+	ebitenutil.DebugPrintAt(screen, "Arrow Keys / Tap to select", screenWidth/2-82, helpY)
+	ebitenutil.DebugPrintAt(screen, "Enter / Tap to start", screenWidth/2-62, helpY+16)
+}
+
+func (g *Game) drawPlaying(screen *ebiten.Image) {
+	// 背景
+	op := &ebiten.DrawImageOptions{}
+	op.ColorScale.Scale(0.3, 0.3, 0.3, 1)
+	screen.DrawImage(backgroundImg, op)
+
+	// 蛇の体
 	for i := 1; i < len(g.snake); i++ {
 		p := g.snake[i]
 		px, py := float64(p.X*gridSize), float64(p.Y*gridSize)
 
 		if i < len(g.snake)-1 {
-			// 中間セグメント: 前後のセグメントを見て直線/カーブを判定
-			prev := g.snake[i-1] // 頭側の隣接セグメント
-			next := g.snake[i+1] // 尻尾側の隣接セグメント
-
+			prev := g.snake[i-1]
+			next := g.snake[i+1]
 			if prev.X == next.X {
-				// 前後が同じX座標 → 縦方向の直線
 				drawSprite(screen, bodyVertical, px, py)
 			} else if prev.Y == next.Y {
-				// 前後が同じY座標 → 横方向の直線
 				drawSprite(screen, bodyHorizontal, px, py)
 			} else {
-				// 前後が異なる軸 → カーブ（曲がり角）
-				curve := getCurveSprite(p, prev, next)
-				drawSprite(screen, curve, px, py)
+				drawSprite(screen, getCurveSprite(p, prev, next), px, py)
 			}
 		} else {
-			// 尻尾（最後のセグメント）: 尻尾の先端が伸びる方向でスプライトを選択
-			// 前のセグメントと反対方向が尻尾の向き
 			prev := g.snake[i-1]
 			var tailDir int
 			switch {
 			case prev.Y < p.Y:
-				tailDir = dirDown // 前が上にある → 尻尾は下向き
+				tailDir = dirDown
 			case prev.Y > p.Y:
 				tailDir = dirUp
 			case prev.X < p.X:
@@ -492,59 +532,108 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		}
 	}
 
-	// --- 食べ物の描画 ---
+	// 食べ物
 	drawSprite(screen, foodSprites[g.foodType],
 		float64(g.food.X*gridSize), float64(g.food.Y*gridSize))
 
-	// --- 頭の描画 ---
-	// 方向別に事前に用意されたスプライトを使うので、回転処理は不要
+	// 頭
 	head := g.snake[0]
 	drawSprite(screen, headSprites[g.direction],
 		float64(head.X*gridSize), float64(head.Y*gridSize))
 
-	// --- スコアの表示 ---
-	// 画面の左上にスコアを表示する（DebugPrint は常に左上に表示される）
-	ebitenutil.DebugPrint(screen, fmt.Sprintf("Score: %d", g.score))
+	// HUD: スコア & 難易度
+	hudText := fmt.Sprintf("Score: %d  [%s]", g.score, difficultyName[g.difficulty])
+	ebitenutil.DebugPrint(screen, hudText)
 
-	// --- ポーズ表示 ---
-	if g.paused {
-		overlay := ebiten.NewImage(screenWidth, screenHeight)
-		overlay.Fill(color.RGBA{0, 0, 0, 120})
-		screen.DrawImage(overlay, nil)
+	// ポーズボタン（右上に常時表示）
+	px, py, pw, ph := g.pauseButtonRect()
+	ebitenutil.DrawRect(screen, float64(px), float64(py), float64(pw), float64(ph), color.RGBA{0, 0, 0, 100})
+	drawBorder(screen, px, py, pw, ph, color.RGBA{80, 80, 80, 255})
+	// ⏸ アイコン（2本の縦線）
+	barW := 4.0
+	barH := float64(ph) - 10
+	gap := 6.0
+	cx := float64(px) + float64(pw)/2
+	cy := float64(py) + 5
+	ebitenutil.DrawRect(screen, cx-gap/2-barW, cy, barW, barH, color.RGBA{200, 200, 200, 255})
+	ebitenutil.DrawRect(screen, cx+gap/2, cy, barW, barH, color.RGBA{200, 200, 200, 255})
+}
 
-		ebitenutil.DebugPrintAt(screen, "PAUSED", screenWidth/2-20, screenHeight/2-10)
-		ebitenutil.DebugPrintAt(screen, "Press Space to resume", screenWidth/2-65, screenHeight/2+10)
-	}
+func (g *Game) drawPauseOverlay(screen *ebiten.Image) {
+	overlay := ebiten.NewImage(screenWidth, screenHeight)
+	overlay.Fill(color.RGBA{0, 0, 0, 140})
+	screen.DrawImage(overlay, nil)
 
-	// --- ゲームオーバー表示 ---
-	// ゲームオーバー状態の場合、画面中央にメッセージを表示する
-	if g.gameOver {
-		// DebugPrintAt を使って指定位置にテキストを表示
-		// 半透明の黒オーバーレイを描画して視認性を上げる
-		overlay := ebiten.NewImage(screenWidth, screenHeight)
-		overlay.Fill(color.RGBA{0, 0, 0, 160})
-		screen.DrawImage(overlay, nil)
+	cy := screenHeight / 2
+	ebitenutil.DebugPrintAt(screen, "PAUSED", screenWidth/2-20, cy-16)
+	ebitenutil.DebugPrintAt(screen, "Space / Tap to resume", screenWidth/2-65, cy+4)
+}
 
-		ebitenutil.DebugPrintAt(screen, "GAME OVER", screenWidth/2-30, screenHeight/2-10)
-		ebitenutil.DebugPrintAt(screen, "Tap or Enter to restart", screenWidth/2-72, screenHeight/2+10)
-	}
+func (g *Game) drawGameOver(screen *ebiten.Image) {
+	overlay := ebiten.NewImage(screenWidth, screenHeight)
+	overlay.Fill(color.RGBA{0, 0, 0, 170})
+	screen.DrawImage(overlay, nil)
+
+	cy := screenHeight/2 - 20
+	ebitenutil.DebugPrintAt(screen, "GAME OVER", screenWidth/2-30, cy)
+	scoreText := fmt.Sprintf("Score: %d  (%s)", g.score, difficultyName[g.difficulty])
+	ebitenutil.DebugPrintAt(screen, scoreText, screenWidth/2-len(scoreText)*3, cy+24)
+	ebitenutil.DebugPrintAt(screen, "Tap or Enter for title", screenWidth/2-68, cy+52)
 }
 
 // ──────────────────────────────────────────────
-// タッチ入力処理（スマホ・タブレット対応）
+// UI ヘルパー
 // ──────────────────────────────────────────────
 
-// swipeThreshold はスワイプと判定する最小移動距離（ピクセル）。
-const swipeThreshold = 16
+// diffButtonRect は難易度ボタンi (0〜2) の矩形を返す。
+func (g *Game) diffButtonRect(i int) (x, y, w, h int) {
+	w = 200
+	h = 40
+	x = screenWidth/2 - w/2
+	y = 200 + i*60
+	return
+}
 
-// handleTouch はタッチ入力を処理し、スワイプ方向に応じて nextDir を設定する。
-// タッチ開始位置から一定距離以上スワイプしたら方向を確定する。
+// pauseButtonRect はポーズボタンの矩形を返す（右上）。
+func (g *Game) pauseButtonRect() (x, y, w, h int) {
+	w = 32
+	h = 32
+	x = screenWidth - w - 8
+	y = 8
+	return
+}
+
+// drawBorder は矩形の枠線を描画する。
+func drawBorder(screen *ebiten.Image, x, y, w, h int, c color.RGBA) {
+	fx, fy, fw, fh := float64(x), float64(y), float64(w), float64(h)
+	t := 2.0 // 線の太さ
+	ebitenutil.DrawRect(screen, fx, fy, fw, t, c)           // 上
+	ebitenutil.DrawRect(screen, fx, fy+fh-t, fw, t, c)      // 下
+	ebitenutil.DrawRect(screen, fx, fy, t, fh, c)            // 左
+	ebitenutil.DrawRect(screen, fx+fw-t, fy, t, fh, c)      // 右
+}
+
+// ──────────────────────────────────────────────
+// タッチ入力処理
+// ──────────────────────────────────────────────
+
 func (g *Game) handleTouch() {
-	// 新しいタッチの検出
+	// プレイ中のみスワイプ操作を処理
+	if g.scene != scenePlaying || g.paused {
+		g.touchTracking = false
+		return
+	}
+
 	touchIDs := inpututil.AppendJustPressedTouchIDs(nil)
 	if len(touchIDs) > 0 && !g.touchTracking {
 		g.touchID = touchIDs[0]
 		g.touchStartX, g.touchStartY = ebiten.TouchPosition(g.touchID)
+
+		// ポーズボタン領域ならスワイプ追跡しない
+		px, py, pw, ph := g.pauseButtonRect()
+		if g.touchStartX >= px && g.touchStartX <= px+pw && g.touchStartY >= py && g.touchStartY <= py+ph {
+			return
+		}
 		g.touchTracking = true
 	}
 
@@ -552,39 +641,30 @@ func (g *Game) handleTouch() {
 		return
 	}
 
-	// タッチが離されたらスワイプ判定
 	if inpututil.IsTouchJustReleased(g.touchID) {
 		g.touchTracking = false
 		return
 	}
 
-	// 現在のタッチ位置を取得してスワイプ距離を計算
 	currentX, currentY := ebiten.TouchPosition(g.touchID)
 	dx := currentX - g.touchStartX
 	dy := currentY - g.touchStartY
 
-	// スワイプ距離がしきい値未満なら何もしない
 	absDx, absDy := dx, dy
-	if absDx < 0 {
-		absDx = -absDx
-	}
-	if absDy < 0 {
-		absDy = -absDy
-	}
+	if absDx < 0 { absDx = -absDx }
+	if absDy < 0 { absDy = -absDy }
+
 	if absDx < swipeThreshold && absDy < swipeThreshold {
 		return
 	}
 
-	// スワイプ方向を判定（X軸/Y軸で移動量が大きい方を採用）
 	if absDx > absDy {
-		// 横方向のスワイプ
 		if dx > 0 && g.direction != dirLeft {
 			g.nextDir = dirRight
 		} else if dx < 0 && g.direction != dirRight {
 			g.nextDir = dirLeft
 		}
 	} else {
-		// 縦方向のスワイプ
 		if dy > 0 && g.direction != dirUp {
 			g.nextDir = dirDown
 		} else if dy < 0 && g.direction != dirDown {
@@ -592,38 +672,21 @@ func (g *Game) handleTouch() {
 		}
 	}
 
-	// スワイプ確定後、起点を更新して連続スワイプに対応
 	g.touchStartX = currentX
 	g.touchStartY = currentY
 }
 
-// isTapped はタッチがタップ（短いタッチ）だったかを判定する。
-// ゲームオーバー画面でのリスタート用。
-func (g *Game) isTapped() bool {
-	touchIDs := inpututil.AppendJustPressedTouchIDs(nil)
-	return len(touchIDs) > 0
-}
+// ──────────────────────────────────────────────
+// スプライト描画
+// ──────────────────────────────────────────────
 
-// drawSprite はスプライト画像(128x128)をグリッドサイズに縮小して描画する。
 func drawSprite(screen *ebiten.Image, sprite *ebiten.Image, x, y float64) {
 	op := &ebiten.DrawImageOptions{}
-	// 128x128 → 20x20 に縮小
 	op.GeoM.Scale(spriteScale, spriteScale)
-	// 画面上の指定位置に配置
 	op.GeoM.Translate(x, y)
 	screen.DrawImage(sprite, op)
 }
 
-// getCurveSprite は体のカーブセグメントに使うスプライトを返す。
-// 現在のセグメント位置(p)と、頭側(prev)・尻尾側(next)の隣接セグメントの位置から、
-// 4種類のカーブスプライトのどれを使うか判定する。
-//
-// カーブの名前は「繋がる2方向」を表す:
-//
-//	top_right:    上と右を繋ぐ角（隣接セグメントが上と右にある）
-//	top_left:     上と左を繋ぐ角
-//	bottom_right: 下と右を繋ぐ角
-//	bottom_left:  下と左を繋ぐ角
 func getCurveSprite(p, prev, next Point) *ebiten.Image {
 	hasUp := (prev.Y < p.Y) || (next.Y < p.Y)
 	hasDown := (prev.Y > p.Y) || (next.Y > p.Y)
@@ -640,39 +703,22 @@ func getCurveSprite(p, prev, next Point) *ebiten.Image {
 	case hasDown && hasLeft:
 		return curveBottomLeft
 	default:
-		return curveTopRight // フォールバック
+		return curveTopRight
 	}
 }
 
 // ──────────────────────────────────────────────
-// Layout() - 論理画面サイズの指定
+// Layout / main
 // ──────────────────────────────────────────────
 
-// Layout はEbitengineから呼び出され、ゲームの論理的な画面サイズを返す。
-// 固定サイズを返すので、ウィンドウサイズが変わってもEbitengineが自動スケーリングする。
 func (g *Game) Layout(outsideWidth, outsideHeight int) (int, int) {
 	return screenWidth, screenHeight
 }
 
-// ──────────────────────────────────────────────
-// main() - エントリーポイント
-// ──────────────────────────────────────────────
-
-// main はプログラムのエントリーポイント。
-// ウィンドウの設定を行い、ゲームループを開始する。
 func main() {
-	// ウィンドウサイズを設定（ピクセル単位）
 	ebiten.SetWindowSize(screenWidth, screenHeight)
-
-	// ウィンドウのタイトルバーに表示されるテキストを設定
-	ebiten.SetWindowTitle("Snake Game")
-
-	// ゲームループを開始する。RunGame は内部で以下を繰り返す:
-	//   1. Update() を呼ぶ（毎秒60回）
-	//   2. Draw() を呼ぶ（毎フレーム）
-	//   3. 画面を更新する
-	// ウィンドウが閉じられるまでこの関数はブロックする（戻ってこない）
+	ebiten.SetWindowTitle("Snake Game - Eldritch Tentacle Horror")
 	if err := ebiten.RunGame(NewGame()); err != nil {
-		log.Fatal(err) // エラーが発生した場合はログに出力して終了
+		log.Fatal(err)
 	}
 }
